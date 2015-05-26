@@ -1,0 +1,281 @@
+#!/usr/bin/env python
+
+"""Find the best reviewer(s) for a given changeset.
+
+This works under both git and mercurial.
+
+1) Runs 'hg diff <argv>' (so by default, diffs all currently edited files).
+   or 'git diff <argv>'.
+2) Analyzes the diff to find out exact lines that have changed.
+3) Runs 'hg/git blame' to figure out who last modified those lines.
+4) For each file, prints the usernames who last-modified any of the
+   diffed lines in the file, along with how many of the lines they
+   modified.
+
+The idea is that if one user has modified all the lines you are
+editing, they are a good candidate to review your change.
+"""
+
+import os
+import re
+import sys
+import subprocess
+
+
+# The line we care about in the diff output is
+#    @@ -<startline>,<numlines> ...
+# or @@ -<startline> ...               # in which <numlines> is taken to be 1
+# (Everything else is header or diff content, which we ignore.)
+_DIFFLINE_RE = re.compile('^@@ -(\d+)(?:,(\d+))? ')
+
+_NEWFILE_RE = re.compile('^--- (.*)')
+
+
+class Mercurial(object):
+    def __init__(self, ui, repo):
+        self.ui = ui
+        self.repo = repo
+
+    def write(self, msg):
+        self.ui.write(msg)
+
+    def find_wholefile_lines(self, files, revision='.'):
+        """Return a map from abspath -> set-of-all-linumbers in the file."""
+        ctx = self.repo[revision]   # state of repository base revision
+        m = ctx.match(files, None, None, 'relpath')
+        all_files = ctx.walk(m)
+
+        all_lines = {}
+        for abspath in all_files:
+            before_text = ctx.filectx(abspath).data()
+            num_lines = before_text.count('\n')
+            all_lines[abspath] = set(range(1, num_lines + 1))
+
+        return all_lines
+
+    def find_modified_lines(self, files, revision='.'):
+        """Return a map from abspath -> set-of-linenumbers changed."""
+        import mercurial.mdiff
+
+        ctx = self.repo[revision]   # state of repository base revision
+        edit_ctx = self.repo[None]  # current working state ('.' + local edits)
+
+        # Find the files that have modifications.
+        m = ctx.match(files, None, None, 'relpath')
+        # Only count files that have been edited from tip.
+        modified = self.repo.status(ctx, None, match=m)[0]
+
+        modified_lines = {}
+        diffopts = mercurial.mdiff.diffopts(context=0, nodates=True)
+        for abspath in modified:
+            before_text = ctx.filectx(abspath).data()
+            after_text = edit_ctx.filectx(abspath).data()
+            diff_text = mercurial.mdiff.unidiff(
+                before_text, None, after_text, None,
+                abspath, abspath, opts=diffopts)
+            # Look at the '@@ -<startline>,<numlines> ...' diffline to
+            # find what lines in the input file were changed.
+            modified_lines.setdefault(abspath, set())
+            for line in diff_text.splitlines():
+                m = _DIFFLINE_RE.match(line)
+                if m:
+                    startline, n = int(m.group(1)), int(m.group(2) or '1')
+                    modified_lines[abspath].update(range(startline,
+                                                         startline + n))
+
+        return modified_lines
+
+    def get_annotation_info(self, abspaths, revision='.'):
+        """Return a map abspath -> list-of-author-names.
+
+        retval[filename][i] says who wrote the i-th line of the file.
+        Line numbers start at 1, so retval[filename][0] is always None.
+        """
+        retval = {}
+        user_to_shortuser = {}
+
+        ctx = self.repo[revision]  # state of repository base revision
+        for abspath in abspaths:
+            retval[abspath] = [None]
+            anno_lines = ctx[abspath].annotate(follow=True)
+            for anno_line in anno_lines:
+                modifier = anno_line[0].user()
+                if modifier not in user_to_shortuser:
+                    user_to_shortuser[modifier] = self.ui.shortuser(modifier)
+                retval[abspath].append(user_to_shortuser[modifier])
+
+        return retval
+
+
+class Git(object):
+    def write(self, msg):
+        sys.stdout.write(msg)
+
+    def find_wholefile_lines(self, files, revision='HEAD'):
+        """Return a map from abspath -> set-of-all-linumbers in the file."""
+        all_lines = {}
+        for f in files:
+            before_text = subprocess.check_output(['git', 'show',
+                                                   '%s:%s' % (revision, f)])
+            num_lines = before_text.count('\n')
+            all_lines[os.path.abspath(f)] = set(range(1, num_lines + 1))
+        return all_lines
+
+    def find_modified_lines(self, files, revision='HEAD'):
+        """Return a map from abspath -> set-of-linenumbers changed."""
+        modified_lines = {}
+
+        # Only count Deleted and Modified files.
+        diff_output = subprocess.check_output(['git', 'diff', '-U0',
+                                               '--diff-filter=DM',
+                                               '--no-ext-diff', '--no-prefix',
+                                               revision, '--'] + files)
+        abspath = None
+        for line in diff_output.splitlines():
+            m = _NEWFILE_RE.match(line)
+            if m:
+                abspath = os.path.abspath(m.group(1))
+                modified_lines[abspath] = set()
+            else:
+                m = _DIFFLINE_RE.match(line)
+                if m:
+                    assert abspath, line    # filename comes before diff info
+                    startline, n = int(m.group(1)), int(m.group(2) or '1')
+                    modified_lines[abspath].update(range(startline,
+                                                         startline + n))
+
+        return modified_lines
+
+    def get_annotation_info(self, abspaths, revision='HEAD'):
+        """Return a map abspath -> list-of-author-nqames.
+
+        retval[filename][i] says who wrote the i-th line of the file.
+        Line numbers start at 1, so retval[filename][0] is always None.
+        """
+        retval = {}
+        author_re = re.compile(r'author-mail <([^>]*)>')
+
+        for abspath in abspaths:
+            retval[abspath] = [None]
+            # TODO(csilvers): also specify -C?
+            blame_output = subprocess.check_output(['git', 'blame', '-M',
+                                                    '--line-porcelain',
+                                                    revision, '--', abspath])
+            for line in blame_output.splitlines():
+                m = author_re.match(line)
+                if m:
+                    author = m.group(1)
+                    # Just to make the common-case output prettier.
+                    if author.endswith('@khanacademy.org'):
+                        author = author[:-len('@khanacademy.org')]
+                    retval[abspath].append(author)
+
+        return retval
+
+
+def findreviewers(vcs, files, revision=None, num_reviewers=3,
+                  whole_file=False, output_per_file=False, ignore=[]):
+    """Find the best reviewer(s) for a given changeset.
+
+    Examines the current changes in this file, and runs 'hg blame' or
+    'git blame' (depending on 'vcs') to find who last edited those
+    same lines.  Collates and returns this information, including how
+    many lines each person is responsible for.
+
+    Arguments:
+        vcs: either a Mercurial or a Git instance, from this file.
+        files: a list of filenames to find reviewer information for
+        revision: what revision to diff against when looking for
+           reviewers (typically '.' for mercurial or 'HEAD' for git).
+        num_reviewers: the number of reviewers to suggest for each file.
+           3 is a reasonable value.
+        whole_file: if True, return reviewer information for the input
+           files as a whole, not just for the diff vs 'revision'.  This
+           is useful when you want to know who is 'most responsible' for
+           a file.
+        output_per_file: if True, instead of printing the best reviewers
+           for the set of input files as a whole, prints a separate list
+           of best reviewers for each file in the input.
+        ignore: a set/list of revisions to ignore when finding blame info.
+           TODO(csilvers): implement this.
+    """
+    # revision has to be a kwarg because of how findreviewers() is
+    # called, but it's actually required.
+    assert revision, 'revision argument cannot be None!'
+
+    if whole_file:
+        modified_lines = vcs.find_wholefile_lines(files, revision)
+    else:
+        modified_lines = vcs.find_modified_lines(files, revision)
+
+    annotation_info = vcs.get_annotation_info(modified_lines.keys(), revision)
+
+    if output_per_file:
+        # filename -> {author: num_lines, ...}
+        num_lines_per_author = {abspath: {} for abspath in modified_lines}
+    else:
+        # None -> {author: num_lines, ...}
+        num_lines_per_author = {None: {}}
+
+    for abspath in modified_lines:
+        for linenum in modified_lines[abspath]:
+            author = annotation_info[abspath][linenum]
+            if output_per_file:
+                num_lines_per_author[abspath].setdefault(author, 0)
+                num_lines_per_author[abspath][author] += 1
+            else:
+                # Just store global info
+                num_lines_per_author[None].setdefault(author, 0)
+                num_lines_per_author[None][author] += 1
+
+    # Print the information out.
+    for abspath in sorted(num_lines_per_author.iterkeys()):
+        if abspath:
+            vcs.write('\n--- %s\n' % abspath)
+
+        reviewers = num_lines_per_author[abspath].items()
+        reviewers.sort(key=lambda (_, num_lines): num_lines, reverse=True)
+        total_lines = sum(num_lines_per_author[abspath].itervalues())
+
+        for (reviewer, reviewer_num_lines) in reviewers[:num_reviewers]:
+            vcs.write('%s: %s lines (%.1f%%)\n'
+                       % (reviewer, reviewer_num_lines,
+                          reviewer_num_lines * 100.0 / total_lines))
+
+
+# How hg uses this script: via the cmdtable hook.
+cmdtable = {
+    'findreviewers':
+    (lambda ui, repo, *files, **opts: (
+        findreviewers(Mercurial(ui, repo), files, **opts)),
+     [('f', 'output-per-file', None, 'Print results per input file'),
+      ('n', 'num-reviewers', 3, 'How many reviewers to show'),
+      ('w', 'whole-file', None, 'Calculate reviewers based on entire file'),
+      ('i', 'ignore', [], 'TODO: Revisions to ignore when annotating'),
+      ('r', 'revision', '.', 'Revision to use as base'),
+      ],
+     '[-f] [-n #] [-w] [-i <commit_id> ...] [FILE...]')
+    }
+
+
+# How git uses this script: via __main__
+if __name__ == '__main__':
+    import argparse
+    parser = argparse.ArgumentParser(description=__doc__)
+
+    parser.add_argument('files', nargs='*')
+    for (shortname, longname, default, help) in cmdtable['findreviewers'][1]:
+        if default is None:
+            parser.add_argument('--%s' % longname, '-%s' % shortname,
+                                help=help, default=default,
+                                action='store_true')
+        else:
+            parser.add_argument('--%s' % longname, '-%s' % shortname,
+                                help=help, default=default,
+                                type=type(default))
+    # The one place we differ from the mercurial defaults.
+    parser.set_defaults(revision='HEAD')
+
+    args = parser.parse_args()
+
+    findreviewers(Git(), **args.__dict__)
