@@ -157,8 +157,7 @@ class Git(object):
 
         for abspath in abspaths:
             retval[abspath] = [None]
-            # TODO(csilvers): also specify -C?
-            blame_output = subprocess.check_output(['git', 'blame', '-M',
+            blame_output = subprocess.check_output(['git', 'blame', '-M', '-C',
                                                     '--line-porcelain',
                                                     revision, '--', abspath])
             for line in blame_output.splitlines():
