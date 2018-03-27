@@ -9,13 +9,21 @@
 # nice to be able to convert the revision-id to the diff-id automatically,
 # which this does.
 #
+# If --tag is specified, the output is the tag associated with the
+# diffid: "phabricator/diff/192259".
+#
 # You need to be able to run `arc` for this to work, which any KA
 # employee should already be able to do.  If the input does not look
 # like a revision-id, or we can't find a diff-id for it, we return
 # the input unchanged.
 
+[ "$1" = "--tag" ] && {
+    tag=1
+    shift
+}
+
 [ -z "$1" ] && {
-    echo "USAGE: $0 <revision-id, e.g. 'D1234'>"
+    echo "USAGE: $0 [--tag] <revision-id, e.g. 'D1234'>"
     exit 1
 }
 
@@ -43,4 +51,8 @@ diff_id=`echo '{"constraints": {"phids": ["'"$diff_phid"'"]}}' \
     exit 0
 }
 
-echo "$diff_id"
+if [ -n "$tag" ]; then
+    echo "phabricator/diff/$diff_id"
+else
+    echo "$diff_id"
+fi
