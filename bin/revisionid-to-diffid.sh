@@ -10,7 +10,8 @@
 # which this does.
 #
 # If --tag is specified, the output is the tag associated with the
-# diffid: "phabricator/diff/192259".
+# diffid: "phabricator/diff/192259".  We also fetch this tag, if not
+# available.
 #
 # You need to be able to run `arc` for this to work, which any KA
 # employee should already be able to do.  If the input does not look
@@ -52,7 +53,12 @@ diff_id=`echo '{"constraints": {"phids": ["'"$diff_phid"'"]}}' \
 }
 
 if [ -n "$tag" ]; then
-    echo "phabricator/diff/$diff_id"
+    full_tag="phabricator/diff/$diff_id"
+    # Make sure the tag exists locally, too.
+    git show-ref "$full_tag" >/dev/null 2>&1 \
+        || git fetch origin "refs/tags/$full_tag:refs/tags/$full_tag" >&2 \
+        || echo "WARNING: unable to fetch '$full_tag'; perhaps it was never pushed?" >&2
+    echo "$full_tag"
 else
     echo "$diff_id"
 fi
