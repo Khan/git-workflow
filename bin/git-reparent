@@ -1,0 +1,199 @@
+#!/bin/sh
+
+# This script changes the current branch to point to a new upstream.
+# It is morally equivalent to
+#     git branch -u <new upstream> [old upstream branch-name]
+#     git p
+# but uses a technique that -- unlike the above -- is successful
+# for stacked phabricator diffs.
+#
+# Here is the situation it is intended to be used:
+#
+#     git co -b stack1
+#     ....  # lots of work here
+#     arc diff
+#
+#     git co -b stack2     # branched off of stack1!
+#     ...
+#     arc diff
+#
+#     git co stack1
+#     arc land
+#
+#     git co stack2
+#     ???
+#
+# The `arc land` merges stack1 back into the base branch and deletes
+# it, leaving stack2 without an upstream.  In a normal world you'd just
+# do `git branch -u mydeploybranch; git p`, but that doesn't work with
+# phabricator -- or probably with github -- because phab doesn't just
+# rebase stack1 onto the base branch, it *squashes* the commits.
+# (It also rewrites the commit message, so there's a problem even if
+# stack1 only has one commit in it.)
+#
+# As a result, at the `???` line stack2 has a bunch of changes it
+# inherited from stack1, and the base branch has those same changes
+# but in a totally different commit.  When you try to rebase (by
+# running `git p`) in stack2, you are liable to get a whole bunch of
+# conflicts as git tries to reconcile the two versions.
+#
+# This script fixes that by using a different approach to fix the
+# upstream.  It works like this:
+#     git co base_branch
+#     git co -b stack2.tmp
+#     git branch -u base_branch     # `co -b` should default to this, but...
+#     git cherry-pick @{u}..stack2
+#     git branch -M stack2.tmp stack2
+# That is, instead of trying to rebase all the changes from stack1
+# onto stack2, it cherry-picks them on.  The actual implementation is
+# different due to the fact cherry-pick can be interactive (in case of
+# conflicts and the like), but that is the general idea.
+#
+# TODO(csilvers): write a test for this.
+
+set -e
+
+if [ -z "$1" ]; then
+    echo "USAGE: $0 <branch to set as our upstream>"
+    echo "       Call this in the branch you want to reset the upstream."
+    echo "       You must have a clean client to do this operation."
+    exit 1
+fi
+
+
+NEW_UPSTREAM=$1
+OLD_UPSTREAM=$2
+BRANCH_NAME=`git symbolic-ref --short HEAD`   # the name of our current branch
+EXISTING_SHA=`git rev-parse --short HEAD`     # to revert to in case of error
+
+
+verify_state() {
+    # The client must be clean.  We'll allow untracked files because
+    # I *think* those should be ok?  And it's faster to not check for
+    # them.  See https://gist.github.com/sindresorhus/3898739
+    if ! git diff --quiet --ignore-submodules HEAD; then
+        echo "Workspace is not clean (run 'git status' to see).  Aborting."
+        exit 1
+    fi
+
+    if ! git rev-parse --verify --quiet "$NEW_UPSTREAM" > /dev/null; then
+        echo "Cannot find '$NEW_UPSTREAM' to use as the new upstream."
+        exit 1
+    fi
+
+    if [ -z "$BRANCH_NAME" ]; then
+        echo "Cannot determine the current branch name"
+        exit 1
+    fi
+
+    # The intended use is for phabricator stacked diffs, in which case
+    # the old upstream has gone away.  We won't *require* that, but we
+    # will require prompting if the old upstream exists.
+    # TODO(csilvers): remove this if it turns out to be too onerous.
+    if git rev-parse --verify --quiet '@{u}' > /dev/null; then
+        upstream=`git rev-parse --symbolic-full-name '@{u}'`
+        echo "Existing upstream already exists: it's $upstream."
+        echo -n "Are you sure you want to change it? (y/N) "
+        read p
+        if [ "$p" != y ]; then
+            echo "Aborting."
+            exit 0
+        fi
+    fi
+
+}
+
+
+# Find the HEAD commit for the old upstream.  That is, to use the
+# example at the top of the file, we try to find the commit that
+# stack1 was at when we ran `git co -b stack2`.  This is not trivial
+# because branch stack1 has been deleted by the time this has run,
+# and the commit we branched from probably no longer is reachable
+# from anywhere (since phabricator modified it via squashing when it
+# landed stack1).  The best I can do is look in the reflog to find
+# all commits that mention "stack1" and see if any of those commits
+# exist in the history for our current branch.  If so, we assume
+# that's the commit where we branched off.
+# $1: the name of the old upstream branch if known, or empty if not.
+head_of_old_upstream() {
+    if [ -z "$1" ]; then
+        # We'll *try* `@{u}`; if upstream *does* still exist then this
+        # will give our answer with no work at all.  If this command
+        # succeeds it echos the branch-name to stdout which is just what
+        # we want.
+        if git rev-parse --verify --quiet '@{u}' > /dev/null; then
+            return      # it's already echoed the return value, so we're done
+        fi
+    fi
+
+    # Now find out our upstream's branch-name by looking in .config.
+    if [ -n "$1" ]; then
+        upstream_branch="$1"
+    else
+        upstream_branch=`git config "branch.${BRANCH_NAME}.merge"`
+        if [ -z "$upstream_branch" ]; then
+            echo "Cannot figure out what our upstream branch used to be"
+            exit 1
+        fi
+        upstream_origin=`git config "branch.${BRANCH_NAME}.remote"`
+        if [ "$upstream_origin" != "." ]; then
+            # TODO(csilvers): I guess it *could* be remote, I'd just have
+            # to figure out the syntax for checking it out, below.
+            echo "Upstream branch `git config "branch.${our_branch}.merge"` cannot be remote"
+            exit 1
+        fi
+        upstream_branch=`expr "$upstream_branch" : "refs/heads/\(.*\)"`
+        if [ -z "$upstream_branch" ]; then
+            echo "Unexpected format for `git config "branch.${BRANCH_NAME}.merge"`: should start with 'refs/heads'"
+            exit 1
+        fi
+    fi
+
+    # Now we try to find what the upstream-commit was when we created
+    # our branch.  Our approach is to find *any* commit that ever existed
+    # on the old-upstream-branch, by looking for
+    #    moving from ... to <old_upstream_branch>
+    # in the reflog.  We then look for those commits in our branch.  We
+    # take the latest one that exists in our branch as being the head of
+    # upstream.
+    best_guess_for_head=""
+    candidates=`git reflog --no-abbrev-commit | grep " to $upstream_branch" | cut -d" " -f1`
+    for commit in $candidates; do
+        if [ `git merge-base "$commit" HEAD` = "$commit" ]; then
+            # It's in our branch!  So this is our winner unless we've
+            # already seen a good candidate that was committed later.
+            if [ -z "$best_guess_for_head" -o \
+                    "`git merge-base "$commit" "$best_guess_for_head"`" = "$best_guess_for_head" ]; then
+                best_guess_for_head="$commit"
+            fi
+        fi
+    done
+    if [ -z "$best_guess_for_head" ]; then
+        echo "Could not figure out the old upstream's last commit, must abort."
+        echo "TODO(csilvers): try using the tag phabricator/base/... instead."
+        exit 1
+    fi
+
+    echo "$best_guess_for_head"
+}
+
+
+verify_state
+old_upstream_head=`head_of_old_upstream "$OLD_UPSTREAM"`
+
+echo "==========================================================="
+echo "Setting upstream to $NEW_UPSTREAM and cherry-picking."
+echo "If cherry-picking has conflicts and you wish to abort, run:"
+echo "    git cherry-pick --abort; git reset --hard $EXISTING_SHA"
+echo "==========================================================="
+echo
+
+git branch -u "$NEW_UPSTREAM"
+git reset --hard "@{u}"
+git submodule update --init --recursive
+
+# This can fail or cause weird errors if there are conflicts.  Users
+# handle this via git cherry-pick --continue and the like.  To make
+# super-clear those errors and resolutions aren't the responsibility
+# of this script, I use `exec`.
+exec git cherry-pick "$old_upstream_head..$EXISTING_SHA"
