@@ -157,7 +157,7 @@ head_of_old_upstream() {
     # take the latest one that exists in our branch as being the head of
     # upstream.
     best_guess_for_head=""
-    candidates=`git reflog --no-abbrev-commit | grep " to $upstream_branch" | cut -d" " -f1`
+    candidates=`git reflog --no-abbrev-commit | grep " to $upstream_branch$" | cut -d" " -f1`
     for commit in $candidates; do
         if [ `git merge-base "$commit" HEAD` = "$commit" ]; then
             # It's in our branch!  So this is our winner unless we've
