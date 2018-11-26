@@ -34,9 +34,14 @@ elif [ -n "`git config --get branch.review-parent-default`" ]; then
 fi
 
 # Stop people from landing directly to master
-if [ "`git rev-parse --abbrev-ref HEAD`" = "master" ]; then
-    echo "Review branches must not be based off master";
-    exit 1
+# TODO(benkraft): After ka-clone has been setting kaclone.protect-master
+# for a while (2020 should be safe), remove the first half of the || as
+# it should be redundant (and it's kinda hacky).
+if git remote -v | grep -q Khan/webapp || git config kaclone.protect-master | grep -q true; then
+    if [ "`git rev-parse --abbrev-ref HEAD`" = "master" ]; then
+        echo "Review branches must not be based off master";
+        exit 1
+    fi
 fi
 
 # Apart from that check, this command just creates a local branch
