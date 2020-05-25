@@ -35,7 +35,7 @@ revision_id=`echo "$1" | sed -ne 's/^D\([0-9][0-9]*\)$/\1/p'`
 }
 
 diff_phid=`echo '{"constraints": {"ids": ['"$revision_id]}}" \
-    | arc call-conduit differential.revision.search \
+    | arc call-conduit -- differential.revision.search \
     | grep -o '"diffPHID":"[^"]*"' \
     | cut -d'"' -f4`
 [ -z "$diff_phid" ] && {
@@ -44,7 +44,7 @@ diff_phid=`echo '{"constraints": {"ids": ['"$revision_id]}}" \
 }
 
 diff_id=`echo '{"constraints": {"phids": ["'"$diff_phid"'"]}}' \
-    | arc call-conduit differential.diff.search \
+    | arc call-conduit -- differential.diff.search \
     | grep -o '"id":[0-9]*' \
     | cut -d: -f2`
 [ -z "$diff_id" ] && {
