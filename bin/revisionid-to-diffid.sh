@@ -72,6 +72,9 @@ resolve_github() {
     # Don't bother with jq -- it's another dep, and this is easy enough
     # to parse manually.
     branch=`echo "$json" | sed -ne 's/.*"headRefName": *"\([^"]*\)".*/\1/p'`
+    # Make sure the branch exists locally, too.
+    git fetch origin "$branch" >&2 \
+        || echo "WARNING: unable to fetch '$branch'; perhaps it was never pushed?" >&2
     echo "$branch"
 }
 
