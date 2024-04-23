@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
 """Find the best reviewer(s) for a given changeset.
 
@@ -126,10 +126,10 @@ class Git(object):
         modified_lines = {}
 
         # Only count Deleted and Modified files.
-        diff_output = subprocess.check_output(['git', 'diff', '-U0',
-                                               '--diff-filter=DM',
-                                               '--no-ext-diff', '--no-prefix',
-                                               revision, '--'] + files)
+        diff_output = subprocess.check_output(
+            ['git', 'diff', '-U0', '--diff-filter=DM',
+             '--no-ext-diff', '--no-prefix', revision, '--'] + files,
+        ).decode('utf-8')
         abspath = None
         for line in diff_output.splitlines():
             m = _NEWFILE_RE.match(line)
@@ -157,9 +157,10 @@ class Git(object):
 
         for abspath in abspaths:
             retval[abspath] = [None]
-            blame_output = subprocess.check_output(['git', 'blame', '-M', '-C',
-                                                    '--line-porcelain',
-                                                    revision, '--', abspath])
+            blame_output = subprocess.check_output(
+                ['git', 'blame', '-M', '-C', '--line-porcelain',
+                 revision, '--', abspath],
+            ).decode('utf-8')
             for line in blame_output.splitlines():
                 m = author_re.match(line)
                 if m:
@@ -228,13 +229,14 @@ def findreviewers(vcs, files, revision=None, num_reviewers=3,
                 num_lines_per_author[None][author] += 1
 
     # Print the information out.
-    for abspath in sorted(num_lines_per_author.iterkeys()):
+    for abspath in sorted(num_lines_per_author):
         if abspath:
             vcs.write('\n--- %s\n' % abspath)
 
-        reviewers = num_lines_per_author[abspath].items()
-        reviewers.sort(key=lambda (_, num_lines): num_lines, reverse=True)
-        total_lines = sum(num_lines_per_author[abspath].itervalues())
+        reviewers = sorted(num_lines_per_author[abspath].items(),
+                           key=lambda a_and_num_lines: a_and_num_lines[1],
+                           reverse=True)
+        total_lines = sum(num_lines_per_author[abspath].values())
 
         for (reviewer, reviewer_num_lines) in reviewers[:num_reviewers]:
             vcs.write('%s: %s lines (%.1f%%)\n'
