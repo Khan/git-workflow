@@ -33,13 +33,16 @@ elif [ -n "`git config --get branch.review-parent-default`" ]; then
     git co "`git config --get branch.review-parent-default`"
 fi
 
+RED='\033[0;31m'
+NC='\033[0m' # No Color
+
 # Stop people from landing directly to master
 # TODO(benkraft): After ka-clone has been setting kaclone.protect-master
 # for a while (2020 should be safe), remove the first half of the || as
 # it should be redundant (and it's kinda hacky).
 if git remote -v | grep -q Khan/webapp || git config kaclone.protect-master | grep -q true; then
     if [ "`git rev-parse --abbrev-ref HEAD`" = "master" ]; then
-        echo "Review branches must not be based off master";
+        echo "${RED}FATAL ERROR: Review branches must not be based off master${NC}";
         exit 1
     fi
 fi
