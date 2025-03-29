@@ -26,9 +26,9 @@ import subprocess
 #    @@ -<startline>,<numlines> ...
 # or @@ -<startline> ...               # in which <numlines> is taken to be 1
 # (Everything else is header or diff content, which we ignore.)
-_DIFFLINE_RE = re.compile('^@@ -(\d+)(?:,(\d+))? ')
+_DIFFLINE_RE = re.compile(r'^@@ -(\d+)(?:,(\d+))? ')
 
-_NEWFILE_RE = re.compile('^--- (.*)')
+_NEWFILE_RE = re.compile(r'^--- (.*)')
 
 
 class Mercurial(object):
