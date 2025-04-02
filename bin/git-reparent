@@ -53,6 +53,9 @@
 
 set -e
 
+echo "\n\033[1;31m⚠️  DEPRECATION WARNING:\033[0;31m This version of \
+git-reparent has been deprecated.\033[0m\n"
+
 if [ -z "$1" ]; then
     echo "USAGE: $0 <branch to set as our upstream>"
     echo "       Call this in the branch you want to reset the upstream."

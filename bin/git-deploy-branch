@@ -1,5 +1,9 @@
 #!/bin/sh -e
 
+echo "\n\033[1;31m⚠️  DEPRECATION WARNING:\033[0;31m This version of \
+git-deploy-branch has been deprecated."
+echo "It is now being maintained in Khan Academy's OLC repo.\033[0m\n"
+
 USAGE=`cat<<EOF
 USAGE: git deploy-branch <branchname> [parent -- defaults to origin/master]
 

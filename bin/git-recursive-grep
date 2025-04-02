@@ -1,5 +1,8 @@
 #!/bin/bash
 
+echo "\n\033[1;31m⚠️  DEPRECATION WARNING:\033[0;31m This version of \
+git-recursive-grep has been deprecated.\033[0m\n"
+
 USAGE=`cat<<EOF
 USAGE: git recursive-grep <pattern>
 
