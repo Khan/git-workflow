@@ -258,6 +258,18 @@ cmdtable = {
      '[-f] [-n #] [-w] [-i <commit_id> ...] [FILE...]')
     }
 
+def print_deprecation_warning():
+    RED = "\033[0;31m"
+    BOLD_RED = "\033[1;31m"
+    RESET = "\033[0m"
+
+    print(
+        f"{BOLD_RED}⚠️  DEPRECATION WARNING:{RED} This version of "
+        f"git-find-reviewers has been deprecated."
+    )
+    print(
+        f"It is now being maintained in Khan Academy's OLC repo.{RESET}"
+    )
 
 # How git uses this script: via __main__
 if __name__ == '__main__':
@@ -278,5 +290,7 @@ if __name__ == '__main__':
     parser.set_defaults(revision='HEAD')
 
     args = parser.parse_args()
+
+    print_deprecation_warning()
 
     findreviewers(Git(), **args.__dict__)

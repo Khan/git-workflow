@@ -6,6 +6,7 @@ at Khan Academy. (see also: [arcanist])
 [git-at-ka]: https://khanacademy.org/r/git-at-ka
 [arcanist]:  https://github.com/khan/arcanist
 
+> ### NOTE: As of Spring 2025, the scripts in _*this*_ repository are no longer in use at Khan Academy. They have been combined with Our Lovely CLI, so please make any future changes in that repo. This repo is preserved here for historical purposes.
 
 #### git deploy-branch
 Creates a remote _deploy branch_ for use with GitHub-style deploys.
